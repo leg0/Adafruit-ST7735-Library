@@ -41,7 +41,7 @@ as well as Adafruit raw 1.8" TFT display
 #elif defined(ESP8266)
   #include <pgmspace.h>
 #elif defined(__SAM3X8E__)
-  #undef __FlashStringHelper::F(string_literal)
+  #undef F
   #define F(string_literal) string_literal
   #include <include/pio.h>
   #define PROGMEM
@@ -107,13 +107,74 @@ as well as Adafruit raw 1.8" TFT display
 #define ST77XX_YELLOW  0xFFE0
 #define ST77XX_WHITE   0xFFFF
 
+struct ISpiDriver
+{
+  ISpiDriver(int8_t CS, int8_t DC, int8_t RST)
+    : _cs(CS)
+    , _dc(DC)
+    , _rst(RST)
+  { }
+  
+  
+  void CS_HIGH() const;
+  void CS_LOW() const;
+  void DC_HIGH() const;
+  void DC_LOW() const;
+  virtual void init();
+  virtual void BEGIN_TRANSACTION() const { }
+  virtual void END_TRANSACTION() const { }
+  virtual void write(uint8_t c) const = 0;
+  
+  int8_t  _cs, _dc, _rst;
+
+#if defined(USE_FAST_IO)
+  volatile RwReg  *dataport, *clkport, *csport, *dcport;
+
+  #if defined(__AVR__) || defined(CORE_TEENSY)
+    using pinmask_type = uint8_t;
+  #else
+    using pinmask_type = uint32_t;
+  #endif
+  pinmask_typedatapinmask, clkpinmask, cspinmask, dcpinmask;
+#endif
+  
+};
+
+struct HwSpiDriver : ISpiDriver
+{
+  HwSpiDriver(int8_t CS, int8_t DC, int8_t RST = -1)
+    : ISpiDriver(CS, DC, RST)
+  { }
+  
+  void init() override final;
+  void write(uint8_t c) const override final;
+  void BEGIN_TRANSACTION() const override final;
+  void END_TRANSACTION() const override final;
+};
+
+struct BitbangSpiDriver : ISpiDriver
+{
+  BitbangSpiDriver(int8_t CS, int8_t DC, int8_t SID, int8_t SCLK, int8_t RST = -1)
+    : ISpiDriver(CS, DC, RST)
+    , _sid(SID)
+    , _sclk(SCLK)
+  { }
+  
+  void init() override final;
+  void write(uint8_t c) const override final;
+
+private:
+  int8_t _sid, _sclk;
+};
 
 class Adafruit_ST77xx : public Adafruit_GFX {
 
  public:
 
-  Adafruit_ST77xx(int8_t CS, int8_t RS, int8_t SID, int8_t SCLK, int8_t RST = -1);
-  Adafruit_ST77xx(int8_t CS, int8_t RS, int8_t RST = -1);
+  explicit Adafruit_ST77xx(ISpiDriver& spi) 
+    : Adafruit_GFX(ST7735_TFTWIDTH_128, ST7735_TFTHEIGHT_128)
+    , _spi(spi)
+  { }
 
   void     setAddrWindow(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1),
            pushColor(uint16_t color),
@@ -125,17 +186,10 @@ class Adafruit_ST77xx : public Adafruit_GFX {
              uint16_t color),
            setRotation(uint8_t r),
            invertDisplay(boolean i);
-  uint16_t Color565(uint8_t r, uint8_t g, uint8_t b);
-  uint16_t color565(uint8_t r, uint8_t g, uint8_t b) { return Color565(r, g, b); } // sigh
-
-  /* These are not for current use, 8-bit protocol only!
-  uint8_t  readdata(void),
-           readcommand8(uint8_t);
-  uint16_t readcommand16(uint8_t);
-  uint32_t readcommand32(uint8_t);
-  void     dummyclock(void);
-  */
-
+  // Pass 8-bit (each) R,G,B, get back 16-bit packed color
+  static constexpr uint16_t color565(uint8_t r, uint8_t g, uint8_t b) {
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+  }
 
  protected:
   uint8_t  _colstart, _rowstart, _xstart, _ystart; // some displays need this changed
@@ -145,30 +199,9 @@ class Adafruit_ST77xx : public Adafruit_GFX {
            writecommand(uint8_t c),
            writedata(uint8_t d),
            commonInit(const uint8_t *cmdList);
-//uint8_t  spiread(void);
-
 
  private:
-
-  inline void CS_HIGH(void);
-  inline void CS_LOW(void);
-  inline void DC_HIGH(void);
-  inline void DC_LOW(void);
-
-  boolean  _hwSPI;
-
-  int8_t  _cs, _dc, _rst, _sid, _sclk;
-
-#if defined(USE_FAST_IO)
-  volatile RwReg  *dataport, *clkport, *csport, *dcport;
-
-  #if defined(__AVR__) || defined(CORE_TEENSY)  // 8 bit!
-    uint8_t  datapinmask, clkpinmask, cspinmask, dcpinmask;
-  #else    // 32 bit!
-    uint32_t  datapinmask, clkpinmask, cspinmask, dcpinmask;
-  #endif
-#endif
-
+  ISpiDriver& _spi;
 };
 
 #endif

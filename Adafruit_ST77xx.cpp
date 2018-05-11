@@ -39,16 +39,58 @@ inline uint16_t swapcolor(uint16_t x) {
 #endif
 
 
-#if defined (SPI_HAS_TRANSACTION)
-#define SPI_BEGIN_TRANSACTION()    if (_hwSPI)    SPI.beginTransaction(mySPISettings)
-#define SPI_END_TRANSACTION()      if (_hwSPI)    SPI.endTransaction()
-#else
-#define SPI_BEGIN_TRANSACTION()    (void)
-#define SPI_END_TRANSACTION()      (void)
-#endif
+void ISpiDriver::init()
+{
+  pinMode(_dc, OUTPUT);
+  pinMode(_cs, OUTPUT);
+
+  #if defined(USE_FAST_IO)
+    csport    = portOutputRegister(digitalPinToPort(_cs));
+    dcport    = portOutputRegister(digitalPinToPort(_dc));
+    cspinmask = digitalPinToBitMask(_cs);
+    dcpinmask = digitalPinToBitMask(_dc);
+  #endif
+}
+
+void HwSpiDriver::init()
+{
+  ISpiDriver::init();
+  #if defined (SPI_HAS_TRANSACTION)
+    SPI.begin();
+    mySPISettings = SPISettings(24000000, MSBFIRST, SPI_MODE0);
+  #elif defined (__AVR__) || defined(CORE_TEENSY)
+    SPCRbackup = SPCR;
+    SPI.begin();
+    SPI.setClockDivider(SPI_CLOCK_DIV4);
+    SPI.setDataMode(SPI_MODE0);
+    mySPCR = SPCR; // save our preferred state
+    //Serial.print("mySPCR = 0x"); Serial.println(SPCR, HEX);
+    SPCR = SPCRbackup;  // then restore
+  #elif defined (__SAM3X8E__)
+    SPI.begin();
+    SPI.setClockDivider(5/*21*/); //4MHz
+    SPI.setDataMode(SPI_MODE0);
+  #endif
+}
+
+void BitbangSpiDriver::init()
+{
+  ISpiDriver::init();
+  pinMode(_sclk, OUTPUT);
+  pinMode(_sid , OUTPUT);
+  digitalWrite(_sclk, LOW);
+  digitalWrite(_sid, LOW);
+
+  #if defined(USE_FAST_IO)
+    clkport     = portOutputRegister(digitalPinToPort(_sclk));
+    dataport    = portOutputRegister(digitalPinToPort(_sid));
+    clkpinmask  = digitalPinToBitMask(_sclk);
+    datapinmask = digitalPinToBitMask(_sid);
+  #endif
+}
 
 // Constructor when using software SPI.  All output pins are configurable.
-Adafruit_ST77xx::Adafruit_ST77xx(int8_t cs, int8_t dc, int8_t sid, int8_t sclk, int8_t rst) 
+/*Adafruit_ST77xx::Adafruit_ST77xx(int8_t cs, int8_t dc, int8_t sid, int8_t sclk, int8_t rst) 
   : Adafruit_GFX(ST7735_TFTWIDTH_128, ST7735_TFTHEIGHT_160)
 {
   _cs   = cs;
@@ -68,67 +110,83 @@ Adafruit_ST77xx::Adafruit_ST77xx(int8_t cs, int8_t dc, int8_t rst)
   _rst  = rst;
   _hwSPI = true;
   _sid  = _sclk = -1;
+}*/
+
+void Adafruit_ST77xx::spiwrite(uint8_t c) {
+
+  _spi.write(c);
 }
 
-inline void Adafruit_ST77xx::spiwrite(uint8_t c) {
+void HwSpiDriver::write(uint8_t c) const {
+  #if defined (SPI_HAS_TRANSACTION)
+    SPI.transfer(c);
+  #elif defined (__AVR__) || defined(CORE_TEENSY)
+    SPCRbackup = SPCR;
+    SPCR = mySPCR;
+    SPI.transfer(c);
+    SPCR = SPCRbackup;
+  #elif defined (__arm__)
+    SPI.setClockDivider(21); //4MHz
+    SPI.setDataMode(SPI_MODE0);
+    SPI.transfer(c);
+  #endif
+}
 
-  //Serial.println(c, HEX);
+void HwSpiDriver::BEGIN_TRANSACTION() const
+{
+  #if defined(SPI_HAS_TRANSACTION)
+    SPI.beginTransaction(mySPISettings);
+  #endif
+}
 
-  if (_hwSPI) {
-#if defined (SPI_HAS_TRANSACTION)
-      SPI.transfer(c);
-#elif defined (__AVR__) || defined(CORE_TEENSY)
-      SPCRbackup = SPCR;
-      SPCR = mySPCR;
-      SPI.transfer(c);
-      SPCR = SPCRbackup;
-#elif defined (__arm__)
-      SPI.setClockDivider(21); //4MHz
-      SPI.setDataMode(SPI_MODE0);
-      SPI.transfer(c);
-#endif
-  } else {
+void HwSpiDriver::END_TRANSACTION() const
+{
+  #if defined(SPI_HAS_TRANSACTION)
+    SPI.endTransaction();
+  #endif
+}
 
-    // Fast SPI bitbang swiped from LPD8806 library
-    for(uint8_t bit = 0x80; bit; bit >>= 1) {
+
+void BitbangSpiDriver::write(uint8_t c) const {
+  // Fast SPI bitbang swiped from LPD8806 library
+  for(uint8_t bit = 0x80; bit; bit >>= 1) {
 #if defined(USE_FAST_IO)
-      if(c & bit) *dataport |=  datapinmask;
-      else        *dataport &= ~datapinmask;
-      *clkport |=  clkpinmask;
-      *clkport &= ~clkpinmask;
+    if(c & bit) *dataport |=  datapinmask;
+    else        *dataport &= ~datapinmask;
+    *clkport |=  clkpinmask;
+    *clkport &= ~clkpinmask;
 #else
-      if(c & bit) digitalWrite(_sid, HIGH);
-      else        digitalWrite(_sid, LOW);
-      digitalWrite(_sclk, HIGH);
-      digitalWrite(_sclk, LOW);
+    if(c & bit) digitalWrite(_sid, HIGH);
+    else        digitalWrite(_sid, LOW);
+    digitalWrite(_sclk, HIGH);
+    digitalWrite(_sclk, LOW);
 #endif
-    }
   }
 }
 
 
 void Adafruit_ST77xx::writecommand(uint8_t c) {
 
-  DC_LOW();
-  CS_LOW();
-  SPI_BEGIN_TRANSACTION();
+  _spi.DC_LOW();
+  _spi.CS_LOW();
+  _spi.BEGIN_TRANSACTION();
 
   spiwrite(c);
 
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();
 }
 
 
 void Adafruit_ST77xx::writedata(uint8_t c) {
-  SPI_BEGIN_TRANSACTION();
-  DC_HIGH();
-  CS_LOW();
+  _spi.BEGIN_TRANSACTION();
+  _spi.DC_HIGH();
+  _spi.CS_LOW();
     
   spiwrite(c);
 
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();
 }
 
 
@@ -163,56 +221,17 @@ void Adafruit_ST77xx::commonInit(const uint8_t *cmdList) {
   _ystart = _xstart = 0;
   _colstart  = _rowstart = 0; // May be overridden in init func
 
-  pinMode(_dc, OUTPUT);
-  pinMode(_cs, OUTPUT);
-
-#if defined(USE_FAST_IO)
-  csport    = portOutputRegister(digitalPinToPort(_cs));
-  dcport    = portOutputRegister(digitalPinToPort(_dc));
-  cspinmask = digitalPinToBitMask(_cs);
-  dcpinmask = digitalPinToBitMask(_dc);
-#endif
-
-  if(_hwSPI) { // Using hardware SPI
-#if defined (SPI_HAS_TRANSACTION)
-    SPI.begin();
-    mySPISettings = SPISettings(24000000, MSBFIRST, SPI_MODE0);
-#elif defined (__AVR__) || defined(CORE_TEENSY)
-    SPCRbackup = SPCR;
-    SPI.begin();
-    SPI.setClockDivider(SPI_CLOCK_DIV4);
-    SPI.setDataMode(SPI_MODE0);
-    mySPCR = SPCR; // save our preferred state
-    //Serial.print("mySPCR = 0x"); Serial.println(SPCR, HEX);
-    SPCR = SPCRbackup;  // then restore
-#elif defined (__SAM3X8E__)
-    SPI.begin();
-    SPI.setClockDivider(21); //4MHz
-    SPI.setDataMode(SPI_MODE0);
-#endif
-  } else {
-    pinMode(_sclk, OUTPUT);
-    pinMode(_sid , OUTPUT);
-    digitalWrite(_sclk, LOW);
-    digitalWrite(_sid, LOW);
-
-#if defined(USE_FAST_IO)
-    clkport     = portOutputRegister(digitalPinToPort(_sclk));
-    dataport    = portOutputRegister(digitalPinToPort(_sid));
-    clkpinmask  = digitalPinToBitMask(_sclk);
-    datapinmask = digitalPinToBitMask(_sid);
-#endif
-  }
+  _spi.init();
 
   // toggle RST low to reset; CS low so it'll listen to us
-  CS_LOW();
-  if (_rst != -1) {
-    pinMode(_rst, OUTPUT);
-    digitalWrite(_rst, HIGH);
+  _spi.CS_LOW();
+  if (_spi._rst != -1) {
+    pinMode(_spi._rst, OUTPUT);
+    digitalWrite(_spi._rst, HIGH);
     delay(500);
-    digitalWrite(_rst, LOW);
+    digitalWrite(_spi._rst, LOW);
     delay(500);
-    digitalWrite(_rst, HIGH);
+    digitalWrite(_spi._rst, HIGH);
     delay(500);
   }
 
@@ -279,15 +298,15 @@ void Adafruit_ST77xx::setAddrWindow(uint8_t x0, uint8_t y0, uint8_t x1,
 
 
 void Adafruit_ST77xx::pushColor(uint16_t color) {
-  SPI_BEGIN_TRANSACTION();
-  DC_HIGH();
-  CS_LOW();
+  _spi.BEGIN_TRANSACTION();
+  _spi.DC_HIGH();
+  _spi.CS_LOW();
 
   spiwrite(color >> 8);
   spiwrite(color);
 
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();
 }
 
 void Adafruit_ST77xx::drawPixel(int16_t x, int16_t y, uint16_t color) {
@@ -296,15 +315,15 @@ void Adafruit_ST77xx::drawPixel(int16_t x, int16_t y, uint16_t color) {
 
   setAddrWindow(x,y,x+1,y+1);
 
-  SPI_BEGIN_TRANSACTION();
-  DC_HIGH();
-  CS_LOW();
+  _spi.BEGIN_TRANSACTION();
+  _spi.DC_HIGH();
+  _spi.CS_LOW();
 
   spiwrite(color >> 8);
   spiwrite(color);
 
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();
 }
 
 
@@ -318,41 +337,41 @@ void Adafruit_ST77xx::drawFastVLine(int16_t x, int16_t y, int16_t h,
 
   uint8_t hi = color >> 8, lo = color;
     
-  SPI_BEGIN_TRANSACTION();
-  DC_HIGH();
-  CS_LOW();
+  _spi.BEGIN_TRANSACTION();
+  _spi.DC_HIGH();
+  _spi.CS_LOW();
 
   while (h--) {
     spiwrite(hi);
     spiwrite(lo);
   }
 
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();
 }
 
 
-void Adafruit_ST77xx::drawFastHLine(int16_t x, int16_t y, int16_t w,
-  uint16_t color) {
+void Adafruit_ST77xx::drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
 
   // Rudimentary clipping
   if((x >= _width) || (y >= _height)) return;
   if((x+w-1) >= _width)  w = _width-x;
-  setAddrWindow(x, y, x+w-1, y);
+  fillRect(x, y, w, 1, color);
+  /*setAddrWindow(x, y, x+w-1, y);
 
   uint8_t hi = color >> 8, lo = color;
 
-  SPI_BEGIN_TRANSACTION();
-  DC_HIGH();
-  CS_LOW();
+  _spi.BEGIN_TRANSACTION();
+  _spi.DC_HIGH();
+  _spi.CS_LOW();
 
   while (w--) {
     spiwrite(hi);
     spiwrite(lo);
   }
 
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();*/
 }
 
 
@@ -376,26 +395,17 @@ void Adafruit_ST77xx::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
 
   uint8_t hi = color >> 8, lo = color;
     
-  SPI_BEGIN_TRANSACTION();
+  _spi.BEGIN_TRANSACTION();
 
-  DC_HIGH();
-  CS_LOW();
-  for(y=h; y>0; y--) {
-    for(x=w; x>0; x--) {
-      spiwrite(hi);
-      spiwrite(lo);
-    }
+  _spi.DC_HIGH();
+  _spi.CS_LOW();
+  for (int32_t i = w*h; i>0; --i) {
+    spiwrite(hi);
+    spiwrite(lo);
   }
-  CS_HIGH();
-  SPI_END_TRANSACTION();
+  _spi.CS_HIGH();
+  _spi.END_TRANSACTION();
 }
-
-
-// Pass 8-bit (each) R,G,B, get back 16-bit packed color
-uint16_t Adafruit_ST77xx::Color565(uint8_t r, uint8_t g, uint8_t b) {
-  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-}
-
 
 
 void Adafruit_ST77xx::invertDisplay(boolean i) {
@@ -406,7 +416,7 @@ void Adafruit_ST77xx::invertDisplay(boolean i) {
 /******** low level bit twiddling **********/
 
 
-inline void Adafruit_ST77xx::CS_HIGH(void) {
+void ISpiDriver::CS_HIGH() const {
 #if defined(USE_FAST_IO)
   *csport |= cspinmask;
 #else
@@ -414,7 +424,7 @@ inline void Adafruit_ST77xx::CS_HIGH(void) {
 #endif
 }
 
-inline void Adafruit_ST77xx::CS_LOW(void) {
+void ISpiDriver::CS_LOW() const {
 #if defined(USE_FAST_IO)
   *csport &= ~cspinmask;
 #else
@@ -422,7 +432,7 @@ inline void Adafruit_ST77xx::CS_LOW(void) {
 #endif
 }
 
-inline void Adafruit_ST77xx::DC_HIGH(void) {
+void ISpiDriver::DC_HIGH() const {
 #if defined(USE_FAST_IO)
   *dcport |= dcpinmask;
 #else
@@ -430,7 +440,7 @@ inline void Adafruit_ST77xx::DC_HIGH(void) {
 #endif
 }
 
-inline void Adafruit_ST77xx::DC_LOW(void) {
+void ISpiDriver::DC_LOW() const {
 #if defined(USE_FAST_IO)
   *dcport &= ~dcpinmask;
 #else
