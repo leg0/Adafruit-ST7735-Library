@@ -167,6 +167,34 @@ private:
   int8_t _sid, _sclk;
 };
 
+#if defined(USE_TURBO_SPI)
+// https://github.com/anydream/TurboSPI
+#include <TurboSPI.h>
+
+struct TurboSpiDriver : ISpiDriver, private TurboSPI
+{
+  explicit TurboSpiDriver(int8_t CS)
+    : ISpiDriver(CS)
+  { }
+  
+  void init()
+  {
+    ISpiDriver::init();
+    TurboSPI::Begin();
+    TurboSPI::Init(2);
+  }
+  
+  void write(uint8_t const* buf, size_t bufSize) const
+  {
+    auto p = const_cast<TurboSpiDriver*>(this);
+    p->Send(buf, bufSize);
+  }
+  
+  void BEGIN_TRANSACTION() const override final { }
+  void END_TRANSACTION() const override final { }
+};
+#endif
+
 class Adafruit_ST77xx : public Adafruit_GFX {
 
  public:
