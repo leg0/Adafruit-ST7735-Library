@@ -327,51 +327,13 @@ void Adafruit_ST77xx::drawPixel(int16_t x, int16_t y, uint16_t color) {
 }
 
 
-void Adafruit_ST77xx::drawFastVLine(int16_t x, int16_t y, int16_t h,
- uint16_t color) {
-
-  // Rudimentary clipping
-  if((x >= _width) || (y >= _height)) return;
-  if((y+h-1) >= _height) h = _height-y;
-  setAddrWindow(x, y, x, y+h-1);
-
-  uint8_t hi = color >> 8, lo = color;
-    
-  _spi.BEGIN_TRANSACTION();
-  _spi.DC_HIGH();
-  _spi.CS_LOW();
-
-  while (h--) {
-    spiwrite(hi);
-    spiwrite(lo);
-  }
-
-  _spi.CS_HIGH();
-  _spi.END_TRANSACTION();
+void Adafruit_ST77xx::drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color) {
+  fillRect(x, y, 1, h, color);
 }
 
 
 void Adafruit_ST77xx::drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
-
-  // Rudimentary clipping
-  if((x >= _width) || (y >= _height)) return;
-  if((x+w-1) >= _width)  w = _width-x;
   fillRect(x, y, w, 1, color);
-  /*setAddrWindow(x, y, x+w-1, y);
-
-  uint8_t hi = color >> 8, lo = color;
-
-  _spi.BEGIN_TRANSACTION();
-  _spi.DC_HIGH();
-  _spi.CS_LOW();
-
-  while (w--) {
-    spiwrite(hi);
-    spiwrite(lo);
-  }
-
-  _spi.CS_HIGH();
-  _spi.END_TRANSACTION();*/
 }
 
 
@@ -393,20 +355,39 @@ void Adafruit_ST77xx::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
 
   setAddrWindow(x, y, x+w-1, y+h-1);
 
-  uint8_t hi = color >> 8, lo = color;
-    
   _spi.BEGIN_TRANSACTION();
 
   _spi.DC_HIGH();
   _spi.CS_LOW();
+#if 1
+  // about 4x speedup over byte-by-byte transfers
+  uint32_t total = w*h;
+  uint16_t buf[128];
+  // XXX: need to fill the buf after transfer because SPI.transfer is overwriting it with the response.
+  for (; total > 128; total -= 128)
+  {
+    for (int i = 0; i < 128; ++i)
+    {
+      buf[i] = color;
+    }
+    _spi.write(reinterpret_cast<uint8_t*>(buf), sizeof(buf));
+  }
+  for (int i = 0; i < total; ++i)
+  {
+    buf[i] = color;
+  }
+  _spi.write(reinterpret_cast<uint8_t*>(buf), sizeof(buf[0])*total);
+#else
+  uint8_t const hi = color >> 8;
+  uint8_t const lo = color;
   for (int32_t i = w*h; i>0; --i) {
     spiwrite(hi);
     spiwrite(lo);
   }
+#endif
   _spi.CS_HIGH();
   _spi.END_TRANSACTION();
 }
-
 
 void Adafruit_ST77xx::invertDisplay(boolean i) {
   writecommand(i ? ST77XX_INVON : ST77XX_INVOFF);
