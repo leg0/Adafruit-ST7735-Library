@@ -41,14 +41,11 @@ inline uint16_t swapcolor(uint16_t x) {
 
 void ISpiDriver::init()
 {
-  pinMode(_dc, OUTPUT);
   pinMode(_cs, OUTPUT);
 
   #if defined(USE_FAST_IO)
     csport    = portOutputRegister(digitalPinToPort(_cs));
-    dcport    = portOutputRegister(digitalPinToPort(_dc));
     cspinmask = digitalPinToBitMask(_cs);
-    dcpinmask = digitalPinToBitMask(_dc);
   #endif
 }
 
@@ -89,46 +86,24 @@ void BitbangSpiDriver::init()
   #endif
 }
 
-// Constructor when using software SPI.  All output pins are configurable.
-/*Adafruit_ST77xx::Adafruit_ST77xx(int8_t cs, int8_t dc, int8_t sid, int8_t sclk, int8_t rst) 
-  : Adafruit_GFX(ST7735_TFTWIDTH_128, ST7735_TFTHEIGHT_160)
-{
-  _cs   = cs;
-  _dc   = dc;
-  _sid  = sid;
-  _sclk = sclk;
-  _rst  = rst;
-  _hwSPI = false;
-}
-
-// Constructor when using hardware SPI.  Faster, but must use SPI pins
-// specific to each board type (e.g. 11,13 for Uno, 51,52 for Mega, etc.)
-Adafruit_ST77xx::Adafruit_ST77xx(int8_t cs, int8_t dc, int8_t rst) 
-  : Adafruit_GFX(ST7735_TFTWIDTH_128, ST7735_TFTHEIGHT_160) {
-  _cs   = cs;
-  _dc   = dc;
-  _rst  = rst;
-  _hwSPI = true;
-  _sid  = _sclk = -1;
-}*/
-
 void Adafruit_ST77xx::spiwrite(uint8_t c) {
 
-  _spi.write(c);
+  _spi.write(&c, 1);
 }
 
-void HwSpiDriver::write(uint8_t c) const {
+void HwSpiDriver::write(uint8_t const* buf, size_t bufSize) const {
+  // XXX: SPI.transfer modifies the buffer :(
   #if defined (SPI_HAS_TRANSACTION)
-    SPI.transfer(c);
+    SPI.transfer(const_cast<uint8_t*>(buf), bufSize);
   #elif defined (__AVR__) || defined(CORE_TEENSY)
     SPCRbackup = SPCR;
     SPCR = mySPCR;
-    SPI.transfer(c);
+    SPI.transfer(const_cast<uint8_t*>(buf), bufSize);
     SPCR = SPCRbackup;
   #elif defined (__arm__)
     SPI.setClockDivider(21); //4MHz
     SPI.setDataMode(SPI_MODE0);
-    SPI.transfer(c);
+    SPI.transfer(const_cast<uint8_t*>(buf), bufSize);
   #endif
 }
 
@@ -147,27 +122,31 @@ void HwSpiDriver::END_TRANSACTION() const
 }
 
 
-void BitbangSpiDriver::write(uint8_t c) const {
+void BitbangSpiDriver::write(uint8_t const* buf, size_t bufSize) const {
   // Fast SPI bitbang swiped from LPD8806 library
-  for(uint8_t bit = 0x80; bit; bit >>= 1) {
-#if defined(USE_FAST_IO)
-    if(c & bit) *dataport |=  datapinmask;
-    else        *dataport &= ~datapinmask;
-    *clkport |=  clkpinmask;
-    *clkport &= ~clkpinmask;
-#else
-    if(c & bit) digitalWrite(_sid, HIGH);
-    else        digitalWrite(_sid, LOW);
-    digitalWrite(_sclk, HIGH);
-    digitalWrite(_sclk, LOW);
-#endif
+  for (; bufSize>0; --bufSize, ++buf)
+  {
+    uint8_t const c = *buf;
+    for(uint8_t bit = 0x80; bit; bit >>= 1) {
+      #if defined(USE_FAST_IO)
+        if(c & bit) *dataport |=  datapinmask;
+        else        *dataport &= ~datapinmask;
+        *clkport |=  clkpinmask;
+        *clkport &= ~clkpinmask;
+      #else
+        if(c & bit) digitalWrite(_sid, HIGH);
+        else        digitalWrite(_sid, LOW);
+        digitalWrite(_sclk, HIGH);
+        digitalWrite(_sclk, LOW);
+      #endif
+    }
   }
 }
 
 
 void Adafruit_ST77xx::writecommand(uint8_t c) {
 
-  _spi.DC_LOW();
+  DC_LOW();
   _spi.CS_LOW();
   _spi.BEGIN_TRANSACTION();
 
@@ -180,7 +159,7 @@ void Adafruit_ST77xx::writecommand(uint8_t c) {
 
 void Adafruit_ST77xx::writedata(uint8_t c) {
   _spi.BEGIN_TRANSACTION();
-  _spi.DC_HIGH();
+  DC_HIGH();
   _spi.CS_LOW();
     
   spiwrite(c);
@@ -221,17 +200,23 @@ void Adafruit_ST77xx::commonInit(const uint8_t *cmdList) {
   _ystart = _xstart = 0;
   _colstart  = _rowstart = 0; // May be overridden in init func
 
+  #if defined(USE_FAST_IO)
+    dcport    = portOutputRegister(digitalPinToPort(_dc));
+    dcpinmask = digitalPinToBitMask(_dc);
+  #endif
+
+  pinMode(_dc, OUTPUT);
   _spi.init();
 
   // toggle RST low to reset; CS low so it'll listen to us
   _spi.CS_LOW();
-  if (_spi._rst != -1) {
-    pinMode(_spi._rst, OUTPUT);
-    digitalWrite(_spi._rst, HIGH);
+  if (_rst != -1) {
+    pinMode(_rst, OUTPUT);
+    digitalWrite(_rst, HIGH);
     delay(500);
-    digitalWrite(_spi._rst, LOW);
+    digitalWrite(_rst, LOW);
     delay(500);
-    digitalWrite(_spi._rst, HIGH);
+    digitalWrite(_rst, HIGH);
     delay(500);
   }
 
@@ -299,7 +284,7 @@ void Adafruit_ST77xx::setAddrWindow(uint8_t x0, uint8_t y0, uint8_t x1,
 
 void Adafruit_ST77xx::pushColor(uint16_t color) {
   _spi.BEGIN_TRANSACTION();
-  _spi.DC_HIGH();
+  DC_HIGH();
   _spi.CS_LOW();
 
   spiwrite(color >> 8);
@@ -316,7 +301,7 @@ void Adafruit_ST77xx::drawPixel(int16_t x, int16_t y, uint16_t color) {
   setAddrWindow(x,y,x+1,y+1);
 
   _spi.BEGIN_TRANSACTION();
-  _spi.DC_HIGH();
+  DC_HIGH();
   _spi.CS_LOW();
 
   spiwrite(color >> 8);
@@ -357,9 +342,10 @@ void Adafruit_ST77xx::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
 
   _spi.BEGIN_TRANSACTION();
 
-  _spi.DC_HIGH();
+  DC_HIGH();
   _spi.CS_LOW();
 #if 1
+  color = ((color & 0xff) << 8) | (color >> 8);
   // about 4x speedup over byte-by-byte transfers
   uint32_t total = w*h;
   uint16_t buf[128];
@@ -413,7 +399,7 @@ void ISpiDriver::CS_LOW() const {
 #endif
 }
 
-void ISpiDriver::DC_HIGH() const {
+void Adafruit_ST77xx::DC_HIGH() const {
 #if defined(USE_FAST_IO)
   *dcport |= dcpinmask;
 #else
@@ -421,123 +407,10 @@ void ISpiDriver::DC_HIGH() const {
 #endif
 }
 
-void ISpiDriver::DC_LOW() const {
+void Adafruit_ST77xx::DC_LOW() const {
 #if defined(USE_FAST_IO)
   *dcport &= ~dcpinmask;
 #else
   digitalWrite(_dc, LOW);
 #endif
 }
-
-
-
-////////// stuff not actively being used, but kept for posterity
-/*
-
- uint8_t Adafruit_ST77xx::spiread(void) {
- uint8_t r = 0;
- if (_sid > 0) {
- r = shiftIn(_sid, _sclk, MSBFIRST);
- } else {
- //SID_DDR &= ~_BV(SID);
- //int8_t i;
- //for (i=7; i>=0; i--) {
- //  SCLK_PORT &= ~_BV(SCLK);
- //  r <<= 1;
- //  r |= (SID_PIN >> SID) & 0x1;
- //  SCLK_PORT |= _BV(SCLK);
- //}
- //SID_DDR |= _BV(SID);
- 
- }
- return r;
- }
- 
- 
- void Adafruit_ST77xx::dummyclock(void) {
- 
- if (_sid > 0) {
- digitalWrite(_sclk, LOW);
- digitalWrite(_sclk, HIGH);
- } else {
- // SCLK_PORT &= ~_BV(SCLK);
- //SCLK_PORT |= _BV(SCLK);
- }
- }
- uint8_t Adafruit_ST77xx::readdata(void) {
- *portOutputRegister(rsport) |= rspin;
- 
- *portOutputRegister(csport) &= ~ cspin;
- 
- uint8_t r = spiread();
- 
- *portOutputRegister(csport) |= cspin;
- 
- return r;
- 
- } 
- 
- uint8_t Adafruit_ST77xx::readcommand8(uint8_t c) {
- digitalWrite(_rs, LOW);
- 
- *portOutputRegister(csport) &= ~ cspin;
- 
- spiwrite(c);
- 
- digitalWrite(_rs, HIGH);
- pinMode(_sid, INPUT); // input!
- digitalWrite(_sid, LOW); // low
- spiread();
- uint8_t r = spiread();
- 
- 
- *portOutputRegister(csport) |= cspin;
- 
- 
- pinMode(_sid, OUTPUT); // back to output
- return r;
- }
- 
- 
- uint16_t Adafruit_ST77xx::readcommand16(uint8_t c) {
- digitalWrite(_rs, LOW);
- if (_cs)
- digitalWrite(_cs, LOW);
- 
- spiwrite(c);
- pinMode(_sid, INPUT); // input!
- uint16_t r = spiread();
- r <<= 8;
- r |= spiread();
- if (_cs)
- digitalWrite(_cs, HIGH);
- 
- pinMode(_sid, OUTPUT); // back to output
- return r;
- }
- 
- uint32_t Adafruit_ST77xx::readcommand32(uint8_t c) {
- digitalWrite(_rs, LOW);
- if (_cs)
- digitalWrite(_cs, LOW);
- spiwrite(c);
- pinMode(_sid, INPUT); // input!
- 
- dummyclock();
- dummyclock();
- 
- uint32_t r = spiread();
- r <<= 8;
- r |= spiread();
- r <<= 8;
- r |= spiread();
- r <<= 8;
- r |= spiread();
- if (_cs)
- digitalWrite(_cs, HIGH);
- 
- pinMode(_sid, OUTPUT); // back to output
- return r;
- }
- 
- */

@@ -48,8 +48,8 @@
 class Adafruit_ST7735 : public Adafruit_ST77xx {
 
 public:
-  explicit Adafruit_ST7735(ISpiDriver& spi)
-    : Adafruit_ST77xx(spi)
+  explicit Adafruit_ST7735(ISpiDriver& spi, int8_t dc, int8_t rst)
+    : Adafruit_ST77xx(spi, dc, rst)
   { }
   
   // the tab types are so weird we need to do this 'by hand'

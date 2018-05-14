@@ -27,6 +27,9 @@ as well as Adafruit raw 1.8" TFT display
 #include "Arduino.h"
 #include "Print.h"
 #include <Adafruit_GFX.h>
+#include <TurboSPI.h>
+
+#define USE_FAST_IO
 
 #if defined(__AVR__) || defined(CORE_TEENSY)
   #include <avr/pgmspace.h>
@@ -107,62 +110,57 @@ as well as Adafruit raw 1.8" TFT display
 #define ST77XX_YELLOW  0xFFE0
 #define ST77XX_WHITE   0xFFFF
 
+#if defined(__AVR__) || defined(CORE_TEENSY)
+  using pinmask_type = uint8_t;
+#else
+  using pinmask_type = uint32_t;
+#endif
+
 struct ISpiDriver
 {
-  ISpiDriver(int8_t CS, int8_t DC, int8_t RST)
+  explicit ISpiDriver(int8_t CS)
     : _cs(CS)
-    , _dc(DC)
-    , _rst(RST)
-  { }
-  
+  { }  
   
   void CS_HIGH() const;
   void CS_LOW() const;
-  void DC_HIGH() const;
-  void DC_LOW() const;
   virtual void init();
   virtual void BEGIN_TRANSACTION() const { }
   virtual void END_TRANSACTION() const { }
-  virtual void write(uint8_t c) const = 0;
+  virtual void write(uint8_t const* buf, size_t bufSize) const = 0;
   
-  int8_t  _cs, _dc, _rst;
+  int8_t  _cs;
 
 #if defined(USE_FAST_IO)
-  volatile RwReg  *dataport, *clkport, *csport, *dcport;
-
-  #if defined(__AVR__) || defined(CORE_TEENSY)
-    using pinmask_type = uint8_t;
-  #else
-    using pinmask_type = uint32_t;
-  #endif
-  pinmask_typedatapinmask, clkpinmask, cspinmask, dcpinmask;
+  volatile RwReg  *dataport, *clkport, *csport;
+  pinmask_type datapinmask, clkpinmask, cspinmask;
 #endif
   
 };
 
 struct HwSpiDriver : ISpiDriver
 {
-  HwSpiDriver(int8_t CS, int8_t DC, int8_t RST = -1)
-    : ISpiDriver(CS, DC, RST)
+  explicit HwSpiDriver(int8_t CS)
+    : ISpiDriver(CS)
   { }
   
   void init() override final;
-  void write(uint8_t c) const override final;
+  void write(uint8_t const* buf, size_t bufSize) const override final;
   void BEGIN_TRANSACTION() const override final;
   void END_TRANSACTION() const override final;
 };
 
 struct BitbangSpiDriver : ISpiDriver
 {
-  BitbangSpiDriver(int8_t CS, int8_t DC, int8_t SID, int8_t SCLK, int8_t RST = -1)
-    : ISpiDriver(CS, DC, RST)
+  explicit BitbangSpiDriver(int8_t CS, int8_t SID, int8_t SCLK)
+    : ISpiDriver(CS)
     , _sid(SID)
     , _sclk(SCLK)
   { }
   
   void init() override final;
-  void write(uint8_t c) const override final;
-
+  void write(uint8_t const* buf, size_t bufSize) const override final;
+  
 private:
   int8_t _sid, _sclk;
 };
@@ -199,9 +197,11 @@ class Adafruit_ST77xx : public Adafruit_GFX {
 
  public:
 
-  explicit Adafruit_ST77xx(ISpiDriver& spi) 
+  explicit Adafruit_ST77xx(ISpiDriver& spi, int8_t DC, int8_t RST = -1) 
     : Adafruit_GFX(ST7735_TFTWIDTH_128, ST7735_TFTHEIGHT_128)
     , _spi(spi)
+    , _rst(RST)
+    , _dc(DC)
   { }
 
   void     setAddrWindow(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1),
@@ -229,7 +229,16 @@ class Adafruit_ST77xx : public Adafruit_GFX {
            commonInit(const uint8_t *cmdList);
 
  private:
+  void DC_HIGH() const;
+  void DC_LOW() const;
+  
   ISpiDriver& _spi;
+  int8_t const _rst;
+  int8_t const _dc;
+  #if defined(USE_FAST_IO)
+    volatile RwReg  *dcport;
+    pinmask_type dcpinmask;
+  #endif
 };
 
 #endif
