@@ -7,6 +7,8 @@ The 1.44" TFT breakout
   ----> https://www.adafruit.com/product/2088
 as well as Adafruit raw 1.8" TFT display
   ----> http://www.adafruit.com/products/618
+and this 1.44" display
+   ----> https://www.ebay.com/itm/192212322440
 
  
 Check out the links above for our tutorials and wiring diagrams.
